@@ -1,0 +1,20 @@
+{
+    "l": "move_left_kb",
+    "r": "move_right_kb",
+    "u": "move_up_kb",
+    "d": "move_down_kb",
+    "j": "jump_kb",
+    "f": "action_kb",
+    "b": "action_2_kb",
+    "p": "pause",
+    "sl": "cycle_skin_left",
+    "sr": "cycle_skin_right",
+    "x": "restart",
+    "s": "select",
+    "ua": "ui_accept",
+    "uc": "ui_cancel",
+    "ud": "ui_down",
+    "ul": "ui_left",
+    "ur": "ui_right",
+    "uu": "ui_up"
+}
