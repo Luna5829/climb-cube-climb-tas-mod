@@ -3,6 +3,14 @@ var line
 var index = 0
 var functions = {}
 var background_functions = {}
+var call_stack = []
+
+const RESERVED = ["goto", "repeat", "endrepeat", "endfunc"]
+
+var FUNC_DEF_REGEX = RegEx.create_from_string("^func[\\s,]+(\\w+)\\s*(?:\\((.*)\\))?$")
+var FUNC_CALL_REGEX = RegEx.create_from_string("^(\\w+)\\s*\\((.*)\\)$")
+var FUNC_TOGGLE_REGEX = RegEx.create_from_string("^(\\w+)\\s*(?:\\((.*)\\))?[\\s,]+(on|off)$")
+var PARAM_NAME_REGEX = RegEx.create_from_string("^\\w+$")
 
 
 func read(tas_file, keybinds_file):
@@ -76,44 +84,40 @@ func parse_line(line, lines, i, inputs):
     var parts = line.split(delimiter)
 
     # function definition
-    if parts[0] == "func":
-        var func_name = parts[1]
-        if validate_function_name(func_name) == false:
-            return i + 1
-        var func_lines = []
+    var def_match = FUNC_DEF_REGEX.search(line)
+    if def_match:
+        var func_name = def_match.get_string(1)
+        var params = split_args(def_match.get_string(2))
         var new_index = collect_lines_until("endfunc", lines, i + 1)
-        var function_lines = lines.slice(i + 1, new_index)
-        var function_inputs = []
-        var j = 0
-        while j < function_lines.size():
-            var func_line = format_line(function_lines[j])
-            if not is_empty(func_line):
-                j = parse_line(func_line, function_lines, j, function_inputs)
-            else:
-                j += 1
-        functions[func_name] = function_inputs
-        return new_index
+        if validate_function_name(func_name) and validate_params(func_name, params):
+            functions[func_name] = {
+                "params": params,
+                "lines": lines.slice(i + 1, new_index),
+            }
+        return new_index + 1
 
     # direct function call
-    if line.ends_with("()"):
-        var func_name = line.substr(0, line.length() - 2)
-        if not functions.has(func_name):
-            push_error("Function not found: %s" % func_name)
-            return i + 1
-
-        var function_inputs = functions[func_name]
-        for function_input in function_inputs:
-            inputs.append(add_background_functions(function_input[0], function_input[1]))
+    var call_match = FUNC_CALL_REGEX.search(line)
+    if call_match:
+        var func_name = call_match.get_string(1)
+        var function_data = build_function_inputs(func_name, split_args(call_match.get_string(2)))
+        if function_data != null:
+            for function_input in function_data:
+                inputs.append(add_background_functions(function_input[0], function_input[1]))
         return i + 1
 
     # background function toggle
-    if functions.has(parts[0]) and parts[1] in ["on", "off"]:
-        var func_name = parts[0]
-        var toggle = parts[1]
+    var toggle_match = FUNC_TOGGLE_REGEX.search(line)
+    if toggle_match and functions.has(toggle_match.get_string(1)):
+        var func_name = toggle_match.get_string(1)
+        var toggle = toggle_match.get_string(3)
 
         if toggle == "on":
-            var function_inputs = functions[func_name].map(func(func_input): return func_input[0])
-            var function_lines = functions[func_name].map(func(func_input): return func_input[1])
+            var function_data = build_function_inputs(func_name, split_args(toggle_match.get_string(2)))
+            if function_data == null:
+                return i + 1
+            var function_inputs = function_data.map(func(func_input): return func_input[0])
+            var function_lines = function_data.map(func(func_input): return func_input[1])
             background_functions[func_name] = [0, function_inputs, function_lines]
         elif toggle == "off":
             if background_functions.has(func_name):
@@ -214,6 +218,76 @@ func process_inputs(parts, frame_inputs):
         input_key = [input_key]
     for key in input_key:
         frame_inputs.append(key)
+
+
+# functions with args
+func validate_params(func_name, params):
+    var seen = []
+    for param in params:
+        if not PARAM_NAME_REGEX.search(param):
+            push_error("Invalid parameter name \"%s\" in function %s" % [param, func_name])
+            return false
+        if param in seen:
+            push_error("Duplicate parameter \"%s\" in function %s" % [param, func_name])
+            return false
+        if param in keybinds or param in RESERVED:
+            push_error("Parameter \"%s\" in function %s cannot be a keybind or reserved keyword" % [param, func_name])
+            return false
+        seen.append(param)
+    return true
+
+
+# "a, b, c" -> ["a", "b", "c"]
+func split_args(arg_string):
+    var result = []
+    if arg_string.strip_edges() == "":
+        return result
+    for arg in arg_string.split(","):
+        result.append(arg.strip_edges())
+    return result
+
+
+# replace params with args
+func substitute_params(text, params, args):
+    for p in range(params.size()):
+        var regex = RegEx.new()
+        regex.compile("\\b%s\\b" % params[p])
+        text = regex.sub(text, args[p], true)
+    return text
+
+
+func build_function_inputs(func_name, args):
+    if not functions.has(func_name):
+        push_error("Function not found: %s" % func_name)
+        return null
+
+    var func_data = functions[func_name]
+    var params = func_data["params"]
+    if args.size() != params.size():
+        push_error("Function %s expects %d argument(s), got %d" % [func_name, params.size(), args.size()])
+        return null
+
+    if call_stack.has(func_name):
+        push_error("Recursive function call: %s" % func_name)
+        return null
+
+    call_stack.append(func_name)
+
+    # can't use .map here cuz it's a stupid packed string array
+    var function_lines = []
+    for l in func_data["lines"]:
+        function_lines.append(substitute_params(format_line(l), params, args))
+
+    var function_inputs = []
+    var j = 0
+    while j < function_lines.size():
+        var func_line = function_lines[j]
+        if not is_empty(func_line):
+            j = parse_line(func_line, function_lines, j, function_inputs)
+        else:
+            j += 1
+    call_stack.pop_back()
+    return function_inputs
 
 
 # utils
