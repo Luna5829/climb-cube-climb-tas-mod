@@ -323,7 +323,7 @@ func format_line(line):
     # collapse multiple spaces
     var regex = RegEx.new()
     regex.compile("\\s\\s+")
-    line = regex.sub(line, "", true)
+    line = regex.sub(line, " ", true)
 
     return line
 
